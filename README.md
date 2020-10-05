@@ -84,6 +84,7 @@ Dimitris Konstantinou, Giorgos  Dimitrakopoulos, Dionisis Filippas
 
 ## Pending additions
 - Support for ACE cache coherent interfaces
+- AHB5 network interfaces
 
 ## License
 NoCpad is licensed under the [MIT License](./LICENSE).
