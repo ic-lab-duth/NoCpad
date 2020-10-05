@@ -26,7 +26,7 @@ Routers :
 * Wormohole routers with connections Ready-Valid flow controll
 * Virtual Channel based routers over connections links
 
-Arbitration Libray:
+Arbitration Library:
 * Fixed Priority
 * Round Robin
 * Matrix arbiter 

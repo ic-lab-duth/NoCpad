@@ -2,9 +2,9 @@
 #define WH_ROUTER_CON_ST_BUF_H
 
 #include "systemc.h"
-#include "../include/flit_axi.h"
-#include "../include/duth_fun.h"
-#include "../include/arbiters.h"
+#include "./include/flit_axi.h"
+#include "./include/duth_fun.h"
+#include "./include/arbiters.h"
 
 #include "nvhls_connections.h"
 

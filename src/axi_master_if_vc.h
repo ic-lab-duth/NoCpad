@@ -11,11 +11,11 @@
 #include "systemc.h"
 #include "nvhls_connections.h"
 
-#include "../include/flit_axi.h"
+#include "./include/flit_axi.h"
 #include <axi/axi4.h>
 
-#include "../include/axi4_configs_extra.h"
-#include "../include/duth_fun.h"
+#include "./include/axi4_configs_extra.h"
+#include "./include/duth_fun.h"
 
 #define LOG_MAX_OUTS 8
 
@@ -58,9 +58,11 @@ struct order_info {
 // The Responses are getting depacketized into a seperate thread and are fed back to the MASTER
 // Thus Master interface comprises of 4 distinct/parallel blocks WR/RD pack and WR/RD depack
 template <typename cfg>
-SC_MODULE(axi_master_if) {
+SC_MODULE(axi_master_if_vc) {
   typedef typename axi::axi4<axi::cfg::standard_duth> axi4_;
   typedef typename axi::AXI4_Encoding                 enc_;
+  
+  typedef sc_uint< nvhls::log2_ceil<cfg::VCS>::val > cr_t;
   
   typedef flit_dnp<cfg::RREQ_PHITS>  rreq_flit_t;
   typedef flit_dnp<cfg::RRESP_PHITS> rresp_flit_t;
@@ -91,11 +93,17 @@ SC_MODULE(axi_master_if) {
   Connections::Out<axi4_::WRespPayload>  b_out{"b_out"};
   
   // NoC Side Channels
-  Connections::Out<rreq_flit_t>  rd_flit_out{"rd_flit_out"};
-  Connections::In<rresp_flit_t>  rd_flit_in{"rd_flit_in"};
+  Connections::Out<rreq_flit_t>  rd_flit_data_out{"rd_flit_data_out"};
+  Connections::In<cr_t>          rd_flit_cr_in{"rd_flit_cr_in"};
   
-  Connections::Out<wreq_flit_t>  wr_flit_out{"wr_flit_out"};
-  Connections::In<wresp_flit_t>  wr_flit_in{"wr_flit_in"};
+  Connections::In<rresp_flit_t>  rd_flit_data_in{"rd_flit_data_in"};
+  Connections::Out<cr_t>         rd_flit_cr_out{"rd_flit_cr_out"};
+  
+  Connections::Out<wreq_flit_t>  wr_flit_data_out{"wr_flit_data_out"};
+  Connections::In<cr_t>          wr_flit_cr_in{"wr_flit_cr_in"};
+  
+  Connections::In<wresp_flit_t>  wr_flit_data_in{"wr_flit_data_in"};
+  Connections::Out<cr_t>         wr_flit_cr_out{"wr_flit_cr_out"};
   
   
   // --- READ Internals --- //
@@ -109,8 +117,8 @@ SC_MODULE(axi_master_if) {
   outs_table_entry     wr_out_table[1<<dnp::ID_W];
   
   // Constructor
-  SC_HAS_PROCESS(axi_master_if);
-    axi_master_if(sc_module_name name_="axi_master_if")
+  SC_HAS_PROCESS(axi_master_if_vc);
+    axi_master_if_vc(sc_module_name name_="axi_master_if_vc")
     :
     sc_module (name_),
     rd_trans_fin  (2),
@@ -146,18 +154,23 @@ SC_MODULE(axi_master_if) {
       rd_out_table[i].sent     = 0;
       rd_out_table[i].reorder  = false;
     }
-    
-    // For REORD_SCHEME = 0
+    sc_uint<3> credits_avail[cfg::VCS];
+    #pragma hls_unroll yes
+    for (int i=0; i<cfg::VCS; ++i) {
+      credits_avail[i] = 3;
+    }
+  
     sc_uint<LOG_MAX_OUTS> outstanding = 0;
     sc_uint<dnp::D_W>     out_dst = 0;
     
     ar_in.Reset();
-    rd_flit_out.Reset();
+    rd_flit_data_out.Reset();
+    rd_flit_cr_in.Reset();
     
     axi4_::AddrPayload this_req;
     //-- End of Reset ---//
-    #pragma hls_pipeline_init_interval 1
-    #pragma pipeline_stall_mode flush
+    //#pragma hls_pipeline_init_interval 1
+    //#pragma pipeline_stall_mode flush
     while(1) {
       wait();
       if(ar_in.PopNB(this_req)) {
@@ -166,6 +179,8 @@ SC_MODULE(axi_master_if) {
         // 0 : all in-flight transactions must be to the same destination
         // 1 : all in-flight transactions of the SAME ID, must be to the same destination
         sc_uint<dnp::D_W> this_dst = addr_lut_rd(this_req.addr);
+        sc_uint<cfg::VCS> this_vc = 0; //this_req.id.to_uint()==0 ? 0 : 1;
+  
         if (cfg::ORD_SCHEME==0) {
           // Poll for Finished transactions until reordering is not possible.
           #pragma hls_pipeline_init_interval 1
@@ -173,6 +188,9 @@ SC_MODULE(axi_master_if) {
           while((outstanding>0) && (out_dst != this_dst)) {
             sc_uint<dnp::ID_W> tid_fin;
             if(rd_trans_fin.nb_read(tid_fin)) outstanding--;
+  
+            cr_t vc_upd;
+            if(rd_flit_cr_in.PopNB(vc_upd)) credits_avail[vc_upd]++;
             wait();
           }; // End of while reorder
           outstanding++;
@@ -180,20 +198,23 @@ SC_MODULE(axi_master_if) {
         } else {
           // Get info about the outstanding transactions the received request's TID
           outs_table_entry      sel_entry   = rd_out_table[this_req.id.to_uint()];
-          sc_uint<dnp::D_W>     this_dst    = addr_lut_rd(this_req.addr);
+  
           bool                  may_reorder = (sel_entry.sent>0) && (sel_entry.dst_last != this_dst);
           sc_uint<LOG_MAX_OUTS> wait_for    =  sel_entry.sent;
           
-          // Poll for Finished transactions until reordering is not possible.
-          #pragma hls_pipeline_init_interval 1
-          #pragma pipeline_stall_mode flush
-          while(may_reorder || rd_flit_out.Full()) {
+          // Poll for Finished transactions until no longer reordering is possible.
+          //#pragma hls_pipeline_init_interval 1
+          //#pragma pipeline_stall_mode flush
+          while(may_reorder || (credits_avail[this_vc]==0)) {
             sc_uint<dnp::ID_W> tid_fin;
             if(rd_trans_fin.nb_read(tid_fin)) {
               rd_out_table[tid_fin].sent--;                   // update outstanding table
               if(tid_fin==this_req.id.to_uint()) wait_for--;  // update local wait value
             }
             may_reorder = (wait_for>0);
+    
+            cr_t vc_upd;
+            if(rd_flit_cr_in.PopNB(vc_upd)) credits_avail[vc_upd]++;
             wait();
           }; // End of while
           rd_out_table[this_req.id.to_uint()].sent++;
@@ -204,29 +225,47 @@ SC_MODULE(axi_master_if) {
         // Packetize request into a flit. The fields are described in DNP20
         rreq_flit_t tmp_flit;
         tmp_flit.type = SINGLE; // Entire request fits in at single flits thus SINGLE
-        tmp_flit.data[0] = ((sc_uint<dnp::PHIT_W>)0                      << dnp::req::REORD_PTR) |
-                           ((sc_uint<dnp::PHIT_W>)this_req.id            << dnp::req::ID_PTR )   |
-                           ((sc_uint<dnp::PHIT_W>)dnp::PACK_TYPE__RD_REQ << dnp::T_PTR      )    |
-                           ((sc_uint<dnp::PHIT_W>) 0                     << dnp::Q_PTR      )    |
-                           ((sc_uint<dnp::PHIT_W>)this_dst               << dnp::D_PTR      )    |
-                           ((sc_uint<dnp::PHIT_W>)THIS_ID                << dnp::S_PTR      )    |
-                           ((sc_uint<dnp::PHIT_W>)0                      << dnp::V_PTR      )    ;
+        tmp_flit.vc   = this_vc;
+        tmp_flit.data[0] = ((sc_uint<dnp::PHIT_W>)0                     << dnp::req::REORD_PTR) |
+                           ((sc_uint<dnp::PHIT_W>)this_req.id               << dnp::req::ID_PTR ) |
+                           ((sc_uint<dnp::PHIT_W>)dnp::PACK_TYPE__RD_REQ << dnp::T_PTR      ) |
+                           ((sc_uint<dnp::PHIT_W>) 0                     << dnp::Q_PTR      ) |
+                           ((sc_uint<dnp::PHIT_W>)this_dst                   << dnp::D_PTR      ) |
+                           ((sc_uint<dnp::PHIT_W>)THIS_ID                    << dnp::S_PTR      ) ;
         
-        tmp_flit.data[1] = ((sc_uint<dnp::PHIT_W>)this_req.len             << dnp::req::LE_PTR) |
+        tmp_flit.data[1] = ((sc_uint<dnp::PHIT_W>)this_req.len                << dnp::req::LE_PTR) |
                            ((sc_uint<dnp::PHIT_W>)(this_req.addr & 0xffff) << dnp::req::AL_PTR) ;
         
-        tmp_flit.data[2] = ((sc_uint<dnp::PHIT_W>)this_req.burst               << dnp::req::BU_PTR ) |
-                           ((sc_uint<dnp::PHIT_W>)this_req.size                << dnp::req::SZ_PTR ) |
+        tmp_flit.data[2] = ((sc_uint<dnp::PHIT_W>)this_req.burst                    << dnp::req::BU_PTR ) |
+                           ((sc_uint<dnp::PHIT_W>)this_req.size                     << dnp::req::SZ_PTR ) |
                            ((sc_uint<dnp::PHIT_W>)(this_req.addr >> dnp::AL_W) << dnp::req::AH_PTR ) ;
         
-        rd_flit_out.Push(tmp_flit);
-      } else {
-        // No RD Req from Master, simply check for finished Outstanding trans
+        // send header flit to NoC
+        while (credits_avail[this_vc]==0) {
+          sc_uint<dnp::ID_W> tid_fin;
+          if(rd_trans_fin.nb_read(tid_fin)) {
+            if (cfg::ORD_SCHEME==0) outstanding--;
+            else                    rd_out_table[tid_fin].sent--; // update outstanding table
+          }
+          
+          cr_t vc_upd;
+          if (rd_flit_cr_in.PopNB(vc_upd)) credits_avail[vc_upd]++;
+          wait();
+        }
+        bool dbg_rreq_ok = rd_flit_data_out.PushNB(tmp_flit); // We've already checked that !Full thus this should not block.
+        NVHLS_ASSERT_MSG(dbg_rreq_ok, "R Req pack DROP!!!");
+        credits_avail[this_vc]--;
+        
+      } else { // No RD Req from Master, simply check for finished Outstanding trans
         sc_uint<dnp::ID_W> tid_fin;
         if(rd_trans_fin.nb_read(tid_fin)) {
           if (cfg::ORD_SCHEME==0) outstanding--;
           else                    rd_out_table[tid_fin].sent--; // update outstanding table
         }
+  
+        cr_t vc_upd;
+        if (rd_flit_cr_in.PopNB(vc_upd)) credits_avail[vc_upd]++;
+        //wait();
       }
     } // End of while(1)
   }; // End of Read Request Packetizer
@@ -236,12 +275,17 @@ SC_MODULE(axi_master_if) {
   //-----------------------------------//
   void rd_resp_depack_job () {
     r_out.Reset();
-    rd_flit_in.Reset();
+    rd_flit_data_in.Reset();
+    rd_flit_cr_out.Reset();
     while(1) {
       // Get the response flits, depacketize them to form AXI Master's response and
       //   inform the packetizer for the transaction completion
       rresp_flit_t flit_rcv;
-      flit_rcv = rd_flit_in.Pop();
+      flit_rcv = rd_flit_data_in.Pop();
+      
+      cr_t flit_rcv_vc = flit_rcv.get_vc();
+      bool dbg_rresp_cr_ok = rd_flit_cr_out.PushNB(flit_rcv_vc);
+      NVHLS_ASSERT_MSG(dbg_rresp_cr_ok, "R Resp credit DROP!!!");
       
       // Construct the transaction's attributes to build the response accordingly.
       axi4_::AddrPayload   active_trans;
@@ -276,56 +320,61 @@ SC_MODULE(axi_master_if) {
       unsigned char resp_build_tmp[cfg::RD_LANES];
       #pragma hls_unroll yes
       for(int i=0; i<cfg::RD_LANES; ++i) resp_build_tmp[i] = 0;
-      
-      
-      #pragma hls_pipeline_init_interval 1
-      #pragma pipeline_stall_mode flush
+      //#pragma hls_pipeline_init_interval 1
+      //#pragma pipeline_stall_mode flush
       gather_wr_beats : while (1) {
         // Each iteration moves data from the flit the the appropriate place on the AXI RD response
         // The two flit and axi pointers orchistrate the operation, until completion
-        sc_uint<8> bytes_axi_left  = ((1<<final_size) - (axi_lane_ptr & ((1<<final_size)-1)));
-        sc_uint<8> bytes_flit_left = ((cfg::RRESP_PHITS<<1) - (flit_phit_ptr<<1));
-        sc_uint<8> bytes_per_iter  = (bytes_axi_left<bytes_flit_left) ? bytes_axi_left : bytes_flit_left;
+      sc_uint<8> bytes_axi_left  = ((1<<final_size) - (axi_lane_ptr & ((1<<final_size)-1)));
+      sc_uint<8> bytes_flit_left = ((cfg::RRESP_PHITS<<1) - (flit_phit_ptr<<1));
+      sc_uint<8> bytes_per_iter  = (bytes_axi_left<bytes_flit_left) ? bytes_axi_left : bytes_flit_left;
+      
+      // When the flit pointer resets get the next flit
+      if(flit_phit_ptr==0) {
+        flit_rcv = rd_flit_data_in.Pop();
         
-        if(flit_phit_ptr==0)
-          flit_rcv = rd_flit_in.Pop();
-        
+        cr_t flit_rcv_vc = flit_rcv.get_vc();
+        bool dbg_rresp_cr_ok = rd_flit_cr_out.PushNB(flit_rcv_vc);
+        NVHLS_ASSERT_MSG(dbg_rresp_cr_ok, "R Resp credit DROP!!!");
+      }
+      // Convert flits to axi transfers.
+      #pragma hls_unroll yes
+      build_resp: for (int i = 0; i < (cfg::RD_LANES >> 1); ++i) { // i counts AXI Byte Lanes IN PHITS (i.e. Lanes/bytes_in_phit)
+        if (i>=(axi_lane_ptr>>1) && i<((axi_lane_ptr+bytes_per_iter)>>1)) {
+          //unsigned char loc_flit_ptr = flit_phit_ptr+(i&((bytes_per_iter>>1)-1));
+          cnt_phit_rresp_t loc_flit_ptr = flit_phit_ptr + (i-(axi_lane_ptr>>1));
+          resp_build_tmp[(i << 1) + 1] = (flit_rcv.data[loc_flit_ptr] >> dnp::rdata::B1_PTR) & ((1 << dnp::B_W) - 1); // MSB
+          resp_build_tmp[(i << 1)    ] = (flit_rcv.data[loc_flit_ptr] >> dnp::rdata::B0_PTR) & ((1 << dnp::B_W) - 1); // LSB
+        }
+      }
+      
+      bool done_job  = ((bytes_depacked+bytes_per_iter)==bytes_total);             // All bytes are processed
+      bool done_flit = (flit_phit_ptr+(bytes_per_iter>>1)==cfg::RRESP_PHITS);      // Flit got empty
+      bool done_axi  = (((bytes_depacked+bytes_per_iter)&((1<<final_size)-1))==0); // Beat got full
+      
+      // Push the response to MASTER, when either this Beat got the needed bytes or all bytes are transferred
+      if( done_job || done_axi ) {
+        axi4_::ReadPayload builder_resp;
+        builder_resp.id   = active_trans.id;
+        builder_resp.resp = (flit_rcv.data[flit_phit_ptr] >> dnp::rdata::RE_PTR) & ((1 << dnp::RE_W) - 1);
+        builder_resp.last = ((bytes_depacked+bytes_per_iter)==bytes_total);
+        duth_fun<axi4_::Data, cfg::RD_LANES>::assign_char2ac(builder_resp.data, resp_build_tmp);
+        r_out.Push(builder_resp);
         #pragma hls_unroll yes
-        build_resp: for (int i = 0; i < (cfg::RD_LANES >> 1); ++i) { // i counts AXI Byte Lanes IN PHITS (i.e. Lanes/bytes_in_phit)
-          if (i>=(axi_lane_ptr>>1) && i<((axi_lane_ptr+bytes_per_iter)>>1)) {
-            cnt_phit_rresp_t loc_flit_ptr = flit_phit_ptr + (i-(axi_lane_ptr>>1));
-            resp_build_tmp[(i << 1) + 1] = (flit_rcv.data[loc_flit_ptr] >> dnp::rdata::B1_PTR) & ((1 << dnp::B_W) - 1); // MSB
-            resp_build_tmp[(i << 1)    ] = (flit_rcv.data[loc_flit_ptr] >> dnp::rdata::B0_PTR) & ((1 << dnp::B_W) - 1); // LSB
-          }
-        }
-        
-        bool done_job  = ((bytes_depacked+bytes_per_iter)==bytes_total);             // All bytes are processed
-        bool done_flit = (flit_phit_ptr+(bytes_per_iter>>1)==cfg::RRESP_PHITS);      // Flit got empty
-        bool done_axi  = (((bytes_depacked+bytes_per_iter)&((1<<final_size)-1))==0); // Beat got full
-        
-        // Push the response to MASTER, when either this Beat got the needed bytes or all bytes are transferred
-        if( done_job || done_axi ) {
-          axi4_::ReadPayload builder_resp;
-          builder_resp.id   = active_trans.id;
-          builder_resp.resp = (flit_rcv.data[flit_phit_ptr] >> dnp::rdata::RE_PTR) & ((1 << dnp::RE_W) - 1);
-          builder_resp.last = ((bytes_depacked+bytes_per_iter)==bytes_total);
-          duth_fun<axi4_::Data, cfg::RD_LANES>::assign_char2ac(builder_resp.data, resp_build_tmp);
-          r_out.Push(builder_resp);
-          #pragma hls_unroll yes
-          for(int i=0; i<cfg::RD_LANES; ++i) resp_build_tmp[i] = 0;
-        }
-        
-        // Check to either finish transaction or update the pointers for the next iteration
-        if (done_job) { // End of transaction
-          rd_trans_fin.write(active_trans.id.to_uint());
-          break;
-        } else {
-          bytes_depacked +=bytes_per_iter;
-          flit_phit_ptr = (done_flit) ? 0 : (flit_phit_ptr +(bytes_per_iter>>1));
-          axi_lane_ptr  = (active_trans.burst==enc_::AXBURST::FIXED) ? ((axi_lane_ptr+bytes_per_iter) & ((1<<final_size)-1)) + addr_init_aligned :
-                                                                       ((axi_lane_ptr+bytes_per_iter) & (cfg::RD_LANES-1)) ;
-        }
-      } // End of flit gathering loop
+        for(int i=0; i<cfg::RD_LANES; ++i) resp_build_tmp[i] = 0;
+      }
+      
+      // Check to either finish transaction or update the pointers for the next iteration
+      if (done_job) {
+        rd_trans_fin.write(active_trans.id.to_uint());
+        break;
+      } else {
+        bytes_depacked +=bytes_per_iter;
+        flit_phit_ptr = (done_flit) ? 0 : (flit_phit_ptr +(bytes_per_iter>>1));
+        axi_lane_ptr  = (active_trans.burst==enc_::AXBURST::FIXED) ? ((axi_lane_ptr+bytes_per_iter) & ((1<<final_size)-1)) + addr_init_aligned :
+                                                                     ((axi_lane_ptr+bytes_per_iter) & (cfg::RD_LANES-1)) ;
+      }
+    } // End of flit gathering loop
     } // End of while(1)
   }; // End of Read Responce Packetizer
   
@@ -333,10 +382,16 @@ SC_MODULE(axi_master_if) {
   //--- WRITE REQuest Packetizer ---//
   //--------------------------------//
   void wr_req_pack_job () {
-    wr_flit_out.Reset();
+    wr_flit_data_out.Reset();
+    wr_flit_cr_in.Reset();
     aw_in.Reset();
     w_in.Reset();
     
+    sc_uint<3> wr_credits_avail[cfg::VCS];
+    for (int i=0; i<cfg::VCS; ++i) {
+      wr_credits_avail[i] = 3;
+    }
+
     for (int i=0; i<1<<dnp::ID_W; ++i) {
       wr_out_table[i].dst_last = 0;
       wr_out_table[i].sent     = 0;
@@ -354,14 +409,20 @@ SC_MODULE(axi_master_if) {
         // Depending the reordering scheme
         // 0 : all in-flight transactions must be to the same destination
         // 1 : all in-flight transactions of the SAME ID, must be to the same destination
+        
         sc_uint<dnp::D_W> this_dst = addr_lut_wr(this_req.addr);
+        sc_uint<cfg::VCS> this_vc = 0; // Requests on VC 0
+        
         if (cfg::ORD_SCHEME==0) {
-          // Poll for Finished transactions until reordering is not possible.
+          // Poll for Finished transactions until no longer reordering is possible.
           #pragma hls_pipeline_init_interval 1
           #pragma pipeline_stall_mode flush
           while((outstanding>0) && (out_dst != this_dst)) {
             sc_uint<dnp::ID_W> tid_fin;
             if(wr_trans_fin.nb_read(tid_fin)) outstanding--;
+  
+            cr_t vc_upd;
+            if(wr_flit_cr_in.PopNB(vc_upd)) wr_credits_avail[vc_upd]++;
             wait();
           }; // End of while reorder
           outstanding++;
@@ -370,52 +431,62 @@ SC_MODULE(axi_master_if) {
           outs_table_entry sel_entry = wr_out_table[this_req.id.to_uint()];
           bool may_reorder   = (sel_entry.sent>0) && (sel_entry.dst_last != this_dst);
           sc_uint<LOG_MAX_OUTS> wait_for =  sel_entry.sent; // Counts outstanding transactions to wait for
-          // Poll for Finished transactions until reordering is not possible.
-          while(may_reorder  || wr_flit_out.Full()) {
+          // Poll Finished transactions until no longer reorder is possible.
+          while(may_reorder  || (wr_credits_avail[this_vc]==0)) {
             sc_uint<dnp::ID_W> tid_fin;
             if(wr_trans_fin.nb_read(tid_fin)) {
               wr_out_table[tid_fin].sent--;
               if(tid_fin==this_req.id.to_uint()) wait_for--;
             }
             may_reorder = (wait_for>0);
+    
+            cr_t vc_upd;
+            if(wr_flit_cr_in.PopNB(vc_upd)) wr_credits_avail[vc_upd]++;
             wait();
           }; // End of while reorder
+  
           wr_out_table[this_req.id.to_uint()].sent++;
           wr_out_table[this_req.id.to_uint()].dst_last = this_dst;
         }
-        
+
         
         // --- Start HEADER Packetization --- //
         // Packetize request according DNP20, and send
-        rreq_flit_t tmp_flit;
         wreq_flit_t tmp_mule_flit;
         tmp_mule_flit.type    = HEAD;
-        tmp_mule_flit.data[0] = ((sc_uint<dnp::PHIT_W>)0                       << dnp::req::REORD_PTR) |
-                                ((sc_uint<dnp::PHIT_W>)this_req.id             << dnp::req::ID_PTR)    |
-                                ((sc_uint<dnp::PHIT_W>)dnp::PACK_TYPE__WR_REQ  << dnp::T_PTR)          |
-                                ((sc_uint<dnp::PHIT_W>)0                       << dnp::Q_PTR)          |
-                                ((sc_uint<dnp::PHIT_W>)this_dst                << dnp::D_PTR)          |
-                                ((sc_uint<dnp::PHIT_W>)THIS_ID                 << dnp::S_PTR)          |
-                                ((sc_uint<dnp::PHIT_W>)0                       << dnp::V_PTR)          ;
+        tmp_mule_flit.vc      = this_vc;
+        tmp_mule_flit.data[0] = ((sc_uint<dnp::PHIT_W>)0                           << dnp::req::REORD_PTR) |
+                                ((sc_uint<dnp::PHIT_W>)this_req.id                 << dnp::req::ID_PTR)  |
+                                ((sc_uint<dnp::PHIT_W>)dnp::PACK_TYPE__WR_REQ  << dnp::T_PTR)        |
+                                ((sc_uint<dnp::PHIT_W>)0                       << dnp::Q_PTR)        |
+                                ((sc_uint<dnp::PHIT_W>)this_dst                    << dnp::D_PTR)        |
+                                ((sc_uint<dnp::PHIT_W>)THIS_ID                     << dnp::S_PTR)        ;
         
-        tmp_mule_flit.data[1] = ((sc_uint<dnp::PHIT_W>) this_req.len            << dnp::req::LE_PTR) |
+        tmp_mule_flit.data[1] = ((sc_uint<dnp::PHIT_W>)this_req.len                << dnp::req::LE_PTR) |
                                 ((sc_uint<dnp::PHIT_W>)(this_req.addr & 0xffff) << dnp::req::AL_PTR) ;
         
-        tmp_mule_flit.data[2] = ((sc_uint<dnp::PHIT_W>)this_req.burst               << dnp::req::BU_PTR)  |
-                                ((sc_uint<dnp::PHIT_W>)this_req.size                << dnp::req::SZ_PTR)  |
+        tmp_mule_flit.data[2] = ((sc_uint<dnp::PHIT_W>)this_req.burst                    << dnp::req::BU_PTR)  |
+                                ((sc_uint<dnp::PHIT_W>)this_req.size                     << dnp::req::SZ_PTR)  |
                                 ((sc_uint<dnp::PHIT_W>)(this_req.addr >> dnp::AL_W) << dnp::req::AH_PTR)  ;
-        
+                
         // push header flit to NoC
-        #pragma hls_pipeline_init_interval 1
-        #pragma pipeline_stall_mode flush
-        while (!wr_flit_out.PushNB(tmp_mule_flit)) {
+        //#pragma hls_pipeline_init_interval 1
+        //#pragma pipeline_stall_mode flush
+        while (wr_credits_avail[this_vc]==0) {
           sc_uint<dnp::ID_W> tid_fin;
           if(wr_trans_fin.nb_read(tid_fin)) {
             if (cfg::ORD_SCHEME==0) outstanding--;
             else                    wr_out_table[tid_fin].sent--; // update outstanding table
           }
+          
+          cr_t vc_upd;
+          if (wr_flit_cr_in.PopNB(vc_upd)) wr_credits_avail[vc_upd]++;
           wait();
         }
+        bool dbg_wreq_ok = wr_flit_data_out.PushNB(tmp_mule_flit); // We've already checked that !Full thus this should not block.
+        NVHLS_ASSERT_MSG(dbg_wreq_ok, "W Req pack DROP!!!");
+        wr_credits_avail[this_vc]--;
+        wait();
         
         // --- Start DATA Packetization --- //
         // Data Depacketization happens in a loop. Each iteration pops a flit and constructs a beat.
@@ -429,7 +500,7 @@ SC_MODULE(axi_master_if) {
         // For case (1) the flit is emptied and the next flit is popped at the next iteration
         // For case (2) the beat is pushed to Master and the next beat starts in the next iteration
         
-        sc_uint<8>   addr_init_aligned = (this_req.addr.to_uint() & (cfg::WR_LANES-1)) & ~((1<<this_req.size.to_uint())-1);
+        sc_uint<8>  addr_init_aligned  = (this_req.addr.to_uint() & (cfg::WR_LANES-1)) & ~((1<<this_req.size.to_uint())-1);
         // For data Depacketization we keep 2 pointers.
         //   - One to keep track axi byte lanes to place to data  (axi_lane_ptr)
         //   - One to point at the data of the flit               (flit_phit_ptr)
@@ -450,7 +521,7 @@ SC_MODULE(axi_master_if) {
           sc_uint<8> bytes_flit_left = ((cfg::WREQ_PHITS<<1)         - (flit_phit_ptr<<1));
           sc_uint<8> bytes_per_iter  = (bytes_axi_left<bytes_flit_left) ? bytes_axi_left : bytes_flit_left;
           
-          // If current beat has been packed, get the next one
+          // If current beat has been packed, pop next
           if((bytes_packed & ((1<<this_req.size.to_uint())-1))==0) {
             axi4_::WritePayload this_wr;
             this_wr  = w_in.Pop();
@@ -477,22 +548,31 @@ SC_MODULE(axi_master_if) {
           bool done_flit = (flit_phit_ptr+(bytes_per_iter>>1)==cfg::WREQ_PHITS);                    // Flit got empty
           bool done_axi  = (((bytes_packed+bytes_per_iter)&((1<<(this_req.size.to_uint()))-1))==0); // Beat got full
           
+          // Push the flit to NoC when either this Flit got the needed bytes or all bytes are transferred
           if(done_job || done_flit) {
             tmp_mule_flit.type = (bytes_packed+bytes_per_iter==bytes_total) ? TAIL : BODY;
-            #pragma hls_pipeline_init_interval 1
-            #pragma pipeline_stall_mode flush
-            while (!wr_flit_out.PushNB(tmp_mule_flit)) {
+            tmp_mule_flit.vc   = this_vc;
+            //#pragma hls_pipeline_init_interval 1
+            //#pragma pipeline_stall_mode flush
+            while (wr_credits_avail[this_vc]==0) {
               sc_uint<dnp::ID_W> tid_fin;
               if(wr_trans_fin.nb_read(tid_fin)) {
                 if (cfg::ORD_SCHEME==0) outstanding--;
                 else                    wr_out_table[tid_fin].sent--; // update outstanding table
               }
+      
+              cr_t vc_upd;
+              if (wr_flit_cr_in.PopNB(vc_upd)) wr_credits_avail[vc_upd]++;
               wait();
             }
+            bool dbg_wreq_ok = wr_flit_data_out.PushNB(tmp_mule_flit); // We've already checked that !Full thus this should not block.
+            NVHLS_ASSERT_MSG(dbg_wreq_ok, "W Req pack DROP!!!");
+            wr_credits_avail[this_vc]--;
+            wait();
           }
           
           // Check to either finish transaction or update the pointers for the next iteration
-          if (done_job) {
+          if (done_job) { // End of transaction
             break;
           } else { // Move to next iteration
             bytes_packed  = bytes_packed+bytes_per_iter;
@@ -506,8 +586,11 @@ SC_MODULE(axi_master_if) {
         sc_uint<dnp::ID_W> tid_fin;
         if(wr_trans_fin.nb_read(tid_fin)) {
           if (cfg::ORD_SCHEME==0) outstanding--;
-          else                    wr_out_table[tid_fin].sent--;
+          else                    wr_out_table[tid_fin].sent--; // update outstanding table
         }
+        
+        cr_t vc_upd;
+        if (wr_flit_cr_in.PopNB(vc_upd)) wr_credits_avail[vc_upd]++;
         wait();
       }
     } // End of While(1)
@@ -518,15 +601,20 @@ SC_MODULE(axi_master_if) {
   //--- WRITE RESPonce DE-Packetizer ---//
   //------------------------------------//
   void wr_resp_depack_job(){
-    wr_flit_in.Reset();
+    wr_flit_data_in.Reset();
+    wr_flit_cr_out.Reset();
     b_out.Reset();
     wait();
-    #pragma hls_pipeline_init_interval 1
-    #pragma pipeline_stall_mode flush
+    //#pragma hls_pipeline_init_interval 1
+    //#pragma pipeline_stall_mode flush
     while(1) {
       // Blocking read from NoC to start depacketize the response
       wresp_flit_t flit_rcv;
-      flit_rcv = wr_flit_in.Pop();
+      flit_rcv = wr_flit_data_in.Pop();
+  
+      cr_t flit_rcv_vc = flit_rcv.get_vc();
+      bool dbg_wresp_cr_ok = wr_flit_cr_out.PushNB(flit_rcv_vc);
+      NVHLS_ASSERT_MSG(dbg_wresp_cr_ok, "W Resp credit DROP!!!");
       
       // Construct the trans Header to create the response
       axi4_::WRespPayload this_resp;
@@ -545,14 +633,14 @@ SC_MODULE(axi_master_if) {
     for (int i=0; i<2; ++i) {
       if (addr>=addr_map[i][0].read() && addr <= addr_map[i][1].read()) return i;
     }
-    return 0;
+    return 0; // Or send 404
   };
   
   inline unsigned char addr_lut_wr(const axi4_::Addr addr) {
     for (int i=0; i<2; ++i) {
       if (addr>=addr_map[i][0].read() && addr <= addr_map[i][1].read()) return i;
     }
-    return 0;
+    return 0; // Or send 404
   };
   
 }; // End of Master-IF module

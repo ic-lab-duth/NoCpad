@@ -11,11 +11,11 @@
 #include "systemc.h"
 #include "nvhls_connections.h"
 
-#include "../include/flit_axi.h"
+#include "./include/flit_axi.h"
 #include <axi/axi4.h>
 
-#include "../include/axi4_configs_extra.h"
-#include "../include/duth_fun.h"
+#include "./include/axi4_configs_extra.h"
+#include "./include/duth_fun.h"
 
 #define LOG_MAX_OUTS 8
 
@@ -35,11 +35,11 @@ struct order_info {
   
   inline friend std::ostream& operator << ( std::ostream& os, const order_info& info ) {
     os <<"TID: "<< info.tid <<", Dst: "<< info.dst <<", Ticket: "<< info.ticket;
-    #ifdef SYSTEMC_INCLUDED
-      os << std::dec << " @" << sc_time_stamp();
-    #else
-      os << std::dec << " @" << "no-timed";
-    #endif
+#ifdef SYSTEMC_INCLUDED
+    os << std::dec << " @" << sc_time_stamp();
+#else
+    os << std::dec << " @" << "no-timed";
+#endif
     return os;
   }
 
@@ -78,9 +78,11 @@ struct reorder_book_entry {
 // The Responses are getting depacketized into a seperate thread and are fed back to the MASTER
 // Thus Master interface comprises of 4 distinct/parallel blocks WR/RD pack and WR/RD depack
 template <typename cfg>
-SC_MODULE(axi_master_if) {
+SC_MODULE(axi_master_if_vc) {
   typedef typename axi::axi4<axi::cfg::standard_duth> axi4_;
   typedef typename axi::AXI4_Encoding            enc_;
+  
+  typedef sc_uint< nvhls::log2_ceil<cfg::VCS>::val > cr_t;
   
   typedef flit_dnp<cfg::RREQ_PHITS>  rreq_flit_t;
   typedef flit_dnp<cfg::RRESP_PHITS> rresp_flit_t;
@@ -111,37 +113,43 @@ SC_MODULE(axi_master_if) {
   Connections::Out<axi4_::WRespPayload>  b_out{"b_out"};
   
   // NoC Side Channels
-  Connections::Out<rreq_flit_t> rd_flit_out{"rd_flit_out"};
-  Connections::In<rresp_flit_t> rd_flit_in{"rd_flit_in"};
+  Connections::Out<rreq_flit_t> rd_flit_data_out{"rd_flit_data_out"};
+  Connections::In<cr_t>          rd_flit_cr_in{"rd_flit_cr_in"};
+  Connections::In<rresp_flit_t> rd_flit_data_in{"rd_flit_data_in"};
+  Connections::Out<cr_t>         rd_flit_cr_out{"rd_flit_cr_out"};
   
-  Connections::Out<wreq_flit_t> wr_flit_out{"wr_flit_out"};
-  Connections::In<wresp_flit_t> wr_flit_in{"wr_flit_in"};
+  Connections::Out<wreq_flit_t> wr_flit_data_out{"wr_flit_data_out"};
+  Connections::In<cr_t>          wr_flit_cr_in{"wr_flit_cr_in"};
+  Connections::In<wresp_flit_t> wr_flit_data_in{"wr_flit_data_in"};
+  Connections::Out<cr_t>         wr_flit_cr_out{"wr_flit_cr_out"};
   
   
-  // --- READ Internals --- //
+  // --- READ Reordering --- //
   // FIFOs that pass initiation and finish transactions between Pack-Depack
   sc_fifo<order_info> rd_trans_init{"rd_trans_init"};
   sc_fifo<order_info> rd_trans_fin{"rd_trans_fin"};
   
+  // Placed on READ Packetizer
   outs_table_entry    rd_out_table[(1<<dnp::ID_W)];
-  bool                rd_reord_avail[RD_REORD_SLOTS]; // Available slots of Reorder Buffer
-  
+  bool                rd_reord_avail[RD_REORD_SLOTS];
+  // Placed on READ De-Packetizer
   reorder_buff_entry<rresp_flit_t>  rd_reord_buff[RD_REORD_SLOTS]; // The Reorder buffer storage, plus link list metadata
-  reorder_book_entry                rd_reord_book[(1<<dnp::ID_W)]; // Bookeeping information of the linked list
+  reorder_book_entry                rd_reord_book[(1<<dnp::ID_W)];     // Bookeeping information of the linked list
   
   // --- WRITE Reordering --- //
   sc_fifo<order_info>  wr_trans_init{"wr_trans_init"};
   sc_fifo<order_info>  wr_trans_fin{"wr_trans_fin"};
   
-  outs_table_entry     wr_out_table[(1<<dnp::ID_W)];       // Holds the OutStanding Transactions | Hint : TID_W=4 => 16 slots x 16bits (could be less)
+  // Placed on WRITE Packetizer
+  outs_table_entry     wr_out_table[(1<<dnp::ID_W)];   // Holds the OutStanding Transactions | Hint : TID_W=4 => 16 slots x 16bits (could be less)
   bool                 wr_reord_avail[WR_REORD_SLOTS]; // Available slots of Reorder Buffer
-  
+  // Placed on WRITE De-Packetizer
   reorder_buff_entry<wresp_flit_t> wr_reord_buff[WR_REORD_SLOTS];  // The Reorder buffer storage, plus link list metadata
-  reorder_book_entry               wr_reord_book[(1<<dnp::ID_W)];      // Bookeeping information of the linked list
+  reorder_book_entry               wr_reord_book[(1<<dnp::ID_W)];  // Bookeeping information of the linked list
   
   // Constructor
-  SC_HAS_PROCESS(axi_master_if);
-  axi_master_if(sc_module_name name_="axi_master_if")
+  SC_HAS_PROCESS(axi_master_if_vc);
+  axi_master_if_vc(sc_module_name name_="axi_master_if_vc")
     :
     sc_module (name_),
     rd_trans_init (3),
@@ -179,13 +187,21 @@ SC_MODULE(axi_master_if) {
     
     for (int i=0; i<RD_REORD_SLOTS; ++i) rd_reord_avail[i] = true;
     unsigned char rd_avail_reord_slots = RD_REORD_SLOTS;
-  
+    
+    sc_uint<cfg::VCS> this_vc;
     unsigned char this_dst    = -1;
     unsigned char this_ticket = -1;
     unsigned char head_ticket = -1;
+  
+    sc_uint<3> credits_avail[cfg::VCS];
+    #pragma hls_unroll yes
+    for (int i=0; i<cfg::VCS; ++i) {
+      credits_avail[i] = 3;
+    }
     
     ar_in.Reset();
-    rd_flit_out.Reset();
+    rd_flit_data_out.Reset();
+    rd_flit_cr_in.Reset();
     unsigned char total_rd_flits_sent = 0;
     for (int i=0; i<(1<<dnp::ID_W); ++i) rd_out_table[i].dst_last=0;
     
@@ -197,21 +213,24 @@ SC_MODULE(axi_master_if) {
         // A new request must stall until it is eligible to depart.
         // Reordering of responses of the same IDs are allowed and handled by the depacketizer in the reorder buffer
         // The response that might get reordered must be able to fit in the buffer
-        outs_table_entry sel_entry = rd_out_table[this_req.id.to_uint()];
+        outs_table_entry sel_entry = rd_out_table[this_req.id.to_uint()]; // Get info for this TID outstandings
         
         this_dst = addr_lut_rd(this_req.addr);
         // Check if reorder may occur
         bool may_reorder   = (sel_entry.sent>0) && (sel_entry.dst_last != this_dst);
         bool through_reord = may_reorder || sel_entry.reorder;
+        
         unsigned char wait_for =  sel_entry.sent;
         
         // Calculate the size of the transaction to check if its able to fit in the reorder buffer
         unsigned int bytes_total = ((this_req.len+1)<<this_req.size.to_uint());
         unsigned int phits_total = (bytes_total>>1) + 4; // each phit stores 2 bytes PLUS 2 header phits.
         unsigned int flits_total = (phits_total & 0x3) ? (phits_total>>2)+1 : (phits_total>>2);
+  
+        this_vc = 0;
         
         // All needed slots must available beforehand, thus wait until space has been freed or its no longer possible to be reordered
-        while((through_reord && (rd_avail_reord_slots < flits_total)) || (total_rd_flits_sent>9)) {
+        while((through_reord && (rd_avail_reord_slots < flits_total)) || (credits_avail[this_vc]==0) || (total_rd_flits_sent>9)) {
           order_info rcv_fin;
           if(rd_trans_fin.nb_read(rcv_fin)) {
             if(rd_out_table[rcv_fin.tid].sent==1) rd_out_table[rcv_fin.tid].reorder = false;
@@ -223,6 +242,9 @@ SC_MODULE(axi_master_if) {
               rd_avail_reord_slots++;
             }
           }
+  
+          cr_t vc_upd;
+          if(rd_flit_cr_in.PopNB(vc_upd)) credits_avail[vc_upd]++;
           
           wait();
   
@@ -230,6 +252,7 @@ SC_MODULE(axi_master_if) {
           may_reorder   = (sel_entry.sent>0) && (sel_entry.dst_last != this_dst);
           through_reord = may_reorder || sel_entry.reorder;
         }; // End of while reorder
+  
         
         // Required space is guaranteed. Get tickets for the reorder buffer and
         //   inform the depacketizer to set the reorder buffer
@@ -255,13 +278,13 @@ SC_MODULE(axi_master_if) {
             if (head_ticket >= RD_REORD_SLOTS) head_ticket = this_ticket;
             trans_expect.reord  = true;
             trans_expect.ticket = this_ticket;
-  
+            
             // Send the allocated slot (ticket) to depacketizer, and update local info
             rd_out_table[this_req.id.to_uint()].dst_last = this_dst;
             rd_out_table[this_req.id.to_uint()].sent = rd_out_table[this_req.id.to_uint()].sent + 1;
             total_rd_flits_sent++;
             rd_trans_init.write(trans_expect);
-  
+            
             order_info rcv_fin;
             if (rd_trans_fin.nb_read(rcv_fin)) {
               if (rd_out_table[rcv_fin.tid].sent == 1) rd_out_table[rcv_fin.tid].reorder = false;
@@ -301,6 +324,9 @@ SC_MODULE(axi_master_if) {
             rd_avail_reord_slots++;
           }
         }
+  
+        cr_t vc_upd;
+        if(rd_flit_cr_in.PopNB(vc_upd)) credits_avail[vc_upd]++;
         
         continue;
       }
@@ -311,23 +337,23 @@ SC_MODULE(axi_master_if) {
       // Packetize request into a flit. The fields are described in DNP20
       rreq_flit_t tmp_flit;
       tmp_flit.type = SINGLE; // all request fits in at single flits thus SINGLE
+      tmp_flit.vc   = this_vc;
       tmp_flit.data[0] = ((sc_uint<dnp::PHIT_W>)head_ticket            << dnp::req::REORD_PTR)|
                          ((sc_uint<dnp::PHIT_W>)this_req.id            << dnp::req::ID_PTR)   |
                          ((sc_uint<dnp::PHIT_W>)dnp::PACK_TYPE__RD_REQ << dnp::T_PTR)         |
                          ((sc_uint<dnp::PHIT_W>)0                      << dnp::Q_PTR)         |
                          ((sc_uint<dnp::PHIT_W>)this_dst               << dnp::D_PTR)         |
-                         ((sc_uint<dnp::PHIT_W>)THIS_ID.read()         << dnp::S_PTR)         |
-                         ((sc_uint<dnp::PHIT_W>)0                      << dnp::V_PTR)         ;
+                         ((sc_uint<dnp::PHIT_W>)THIS_ID.read()             << dnp::S_PTR)         ;
       
-      tmp_flit.data[1] = ((sc_uint<dnp::PHIT_W>)this_req.len             << dnp::req::LE_PTR) |
-                         ((sc_uint<dnp::PHIT_W>) this_req.addr & 0xffff) << dnp::req::AL_PTR  ;
+      tmp_flit.data[1] = ((sc_uint<dnp::PHIT_W>)this_req.len                << dnp::req::LE_PTR) |
+                         ((sc_uint<dnp::PHIT_W>) this_req.addr & 0xffff) << dnp::req::AL_PTR;
   
-      tmp_flit.data[2] = ((sc_uint<dnp::PHIT_W>)this_req.burst               << dnp::req::BU_PTR)  |
-                         ((sc_uint<dnp::PHIT_W>)this_req.size                << dnp::req::SZ_PTR)  |
+      tmp_flit.data[2] = ((sc_uint<dnp::PHIT_W>)this_req.burst   << dnp::req::BU_PTR)        |
+                         ((sc_uint<dnp::PHIT_W>)this_req.size    << dnp::req::SZ_PTR)        |
                          ((sc_uint<dnp::PHIT_W>)(this_req.addr >> dnp::AL_W) << dnp::req::AH_PTR ) ;
       
       // Try to push to Network, but continue reading for incoming finished transactions
-      while(!rd_flit_out.PushNB(tmp_flit)) {
+      while(credits_avail[this_vc]==0) {
         order_info rcv_fin;
         if(rd_trans_fin.nb_read(rcv_fin)) {
           if(rd_out_table[rcv_fin.tid].sent==1) rd_out_table[rcv_fin.tid].reorder = false;
@@ -339,8 +365,14 @@ SC_MODULE(axi_master_if) {
             rd_avail_reord_slots++;
           }
         }
+  
+        cr_t vc_upd;
+        if (rd_flit_cr_in.PopNB(vc_upd)) credits_avail[vc_upd]++;
         wait();
       }
+      bool dbg_rreq_ok = rd_flit_data_out.PushNB(tmp_flit); // We've already checked that !Full thus this should not block.
+      NVHLS_ASSERT_MSG(dbg_rreq_ok, "R Req pack DROP!!!");
+      credits_avail[this_vc]--;
     } // End of while(1)
   }; // End of Read Request Packetizer
   
@@ -378,15 +410,15 @@ SC_MODULE(axi_master_if) {
     rresp_flit_t cur_flit;
     
     r_out.Reset();
-    rd_flit_in.Reset();
-    
+    rd_flit_data_in.Reset();
+    rd_flit_cr_out.Reset();
     sc_uint<dnp::SZ_W> final_size;
     sc_uint<dnp::AP_W> addr_part;
     sc_uint<dnp::AP_W> addr_init_aligned;
-    sc_uint<8>         axi_lane_ptr;
-    cnt_phit_rresp_t   flit_phit_ptr;
-    sc_uint<16>        bytes_total;
-    sc_uint<16>        bytes_depacked;
+    sc_uint<8>        axi_lane_ptr;
+    cnt_phit_rresp_t  flit_phit_ptr;
+    sc_uint<16>  bytes_total;
+    sc_uint<16>  bytes_depacked;
     
     unsigned char resp_build_tmp[cfg::RD_LANES];
     axi4_::ReadPayload builder_resp;
@@ -400,10 +432,11 @@ SC_MODULE(axi_master_if) {
       order_info trans_expect;
       if(rd_trans_init.nb_read(trans_expect)) {
         if(trans_expect.reord) {
-          // PUSH new item to linked list
+          // PUSH NEW item to linked list
           if(rd_reord_book[trans_expect.tid].head_flit>=RD_REORD_SLOTS) {
             rd_reord_book[trans_expect.tid].head_flit = trans_expect.ticket;
           }
+          
           // Change old tail's nxt_flit to point to new ticket.
           if(rd_reord_book[trans_expect.tid].tail_flit<RD_REORD_SLOTS) {
             rd_reord_buff[rd_reord_book[trans_expect.tid].tail_flit].nxt_flit = trans_expect.ticket;
@@ -412,16 +445,20 @@ SC_MODULE(axi_master_if) {
           rd_reord_book[trans_expect.tid].tail_flit = trans_expect.ticket;
         } else {
           // When no reorder, ticket gives the number of expected flits
-          rd_reord_book[trans_expect.tid].hol_expect += trans_expect.ticket; 
+          rd_reord_book[trans_expect.tid].hol_expect += trans_expect.ticket; // When no reorder, ticket gives the number of expected flits
         }
-      } // End of new trans sink
+      } // End of new trans sink      
       
       // Handle incoming flits. 
       //   Either a packet that bypasses the reorder buffer,
       //   or Store it in the reorder buffer
       if (!bypass_valid) {
         rresp_flit_t flit_rcv;
-        if (rd_flit_in.PopNB(flit_rcv)) {
+        if (rd_flit_data_in.PopNB(flit_rcv)) {
+          cr_t flit_rcv_vc = flit_rcv.get_vc();
+          bool dbg_rresp_cr_ok = rd_flit_cr_out.PushNB(flit_rcv_vc);
+          NVHLS_ASSERT_MSG(dbg_rresp_cr_ok, "R Resp credit DROP!!!");
+          
           unsigned char rcv_ticket;
           if (flit_rcv.is_head() || flit_rcv.is_single())
             rcv_ticket = ((flit_rcv.data[0] >> (dnp::rresp::REORD_PTR)) & ((1<<dnp::REORD_W)-1));
@@ -457,6 +494,7 @@ SC_MODULE(axi_master_if) {
             if (rd_reord_book[i].hol_expect==0) {
               if (rd_reord_book[i].head_flit < RD_REORD_SLOTS) {
                 if (rd_reord_buff[rd_reord_book[i].head_flit].valid) {
+                  // flit_reord
                   cur_flit          = rd_reord_buff[rd_reord_book[i].head_flit].flit;
                   reord_slot_active = rd_reord_book[i].head_flit;
                   reord_active      = true;
@@ -467,14 +505,14 @@ SC_MODULE(axi_master_if) {
           } // End of REORDER CHECK
         }
         
-        // If either bypass/reorder has a valid response, get the transaction info
+        // If either bypass/reorder has valid transaction, get the transaction info
         if (bypass_active || reord_active) {
           active_trans.id    = (cur_flit.data[0] >> dnp::rresp::ID_PTR) & ((1 << dnp::ID_W) - 1);
           active_trans.burst = (cur_flit.data[0] >> dnp::rresp::BU_PTR) & ((1 << dnp::BU_W) - 1);
           active_trans.size  = (cur_flit.data[1] >> dnp::rresp::SZ_PTR) & ((1 << dnp::SZ_W) - 1);
           active_trans.len   = (cur_flit.data[1] >> dnp::rresp::LE_PTR) & ((1 << dnp::LE_W) - 1);
   
-          final_size        = (unsigned) active_trans.size;
+          final_size        = (unsigned) active_trans.size; // Just the size. more compact
           // Partial lower 8-bit part of address to calculate the initial axi pointer in case of a non-aligned address
           addr_part         = (cur_flit.data[1] >> dnp::rresp::AP_PTR) & ((1<<dnp::AP_W) - 1);
           addr_init_aligned = ((addr_part & (cfg::RD_LANES-1)) & ~((1<<final_size)-1));
@@ -487,17 +525,18 @@ SC_MODULE(axi_master_if) {
           //    2) The remaining byte lanes are less than the available in the flit
           // For case (1) the flit is emptied and the next flit is popped at the next iteration
           // For case (2) the beat is pushed to Master and the next beat starts in the next iteration
-          
+  
           // For data Depacketization loop, we keep 2 pointers.
           //   axi_lane_ptr  -> to keep track axi byte lanes to place to data
           //   flit_phit_ptr -> to point at the data of the flit
           axi_lane_ptr   = addr_init_aligned;  // Bytes MOD axi size
           flit_phit_ptr  = 0;                  // Bytes MOD phits in flit
           
+          // Also we keep track the processed and total data.
           bytes_total    = ((active_trans.len.to_uint()+1)<<final_size);
           bytes_depacked = 0;                                  // Number of DE-packetized bytes
           
-          active_trans_dst = (cur_flit.data[0] >> dnp::S_PTR) & ((1<<dnp::S_W)-1);
+          active_trans_dst = (cur_flit.data[0] >> dnp::S_PTR) & ((1<<dnp::S_W)-1); //cur_flit.get_src();
   
           // Drop the head Flit and update the info
           unsigned char this_ticket;
@@ -539,7 +578,8 @@ SC_MODULE(axi_master_if) {
         sc_uint<8> bytes_axi_left  = ((1<<final_size) - (axi_lane_ptr & ((1<<final_size)-1)));
         sc_uint<8> bytes_flit_left = ((cfg::RRESP_PHITS<<1) - (flit_phit_ptr<<1));
         sc_uint<8> bytes_per_iter  = (bytes_axi_left<bytes_flit_left) ? bytes_axi_left : bytes_flit_left;
-        
+  
+        // Convert flits to AXI Beats.
         #pragma hls_unroll yes
         build_resp: for (int i = 0; i < (cfg::RD_LANES >> 1); ++i) { // i counts AXI Byte Lanes IN PHITS (i.e. Lanes/bytes_in_phit)
           if (i >= (axi_lane_ptr >> 1) && i < ((axi_lane_ptr + bytes_per_iter) >> 1)) {
@@ -588,7 +628,7 @@ SC_MODULE(axi_master_if) {
           rd_trans_fin.write(fin_trans);
         }
         
-        // Push the response when its gets the required data
+        // Push the response when its gets the appropriate data
         if( done_job || done_axi ) {
           builder_resp.id   = active_trans.id;
           builder_resp.resp = (cur_flit.data[flit_phit_ptr] >> dnp::rdata::RE_PTR) & ((1 << dnp::RE_W) - 1);
@@ -603,7 +643,7 @@ SC_MODULE(axi_master_if) {
           bypass_active    = false;
           reord_active     = false;
           bytes_depacked   = 0;
-        } else { 
+        } else {
           // Response continues, update pointers.
           bytes_depacked += bytes_per_iter;
           flit_phit_ptr  = (done_flit) ? 0 : (flit_phit_ptr +(bytes_per_iter>>1));
@@ -618,9 +658,15 @@ SC_MODULE(axi_master_if) {
   //--- WRITE REQuest Packetizer ---//
   //--------------------------------//
   void wr_req_pack_job () {
-    wr_flit_out.Reset();
+    wr_flit_data_out.Reset();
+    wr_flit_cr_in.Reset();
     aw_in.Reset();
     w_in.Reset();
+  
+    sc_uint<3> wr_credits_avail[cfg::VCS];
+    for (int i=0; i<cfg::VCS; ++i) {
+      wr_credits_avail[i] = 3;
+    }
 
     for (int i=0; i<(1<<dnp::ID_W); ++i) {
       wr_out_table[i].dst_last = 0;
@@ -631,6 +677,7 @@ SC_MODULE(axi_master_if) {
     unsigned char wr_avail_reord_slots = WR_REORD_SLOTS;
     unsigned char this_ticket          = -1;
     unsigned char this_dst             = -1;
+    sc_uint<cfg::VCS> this_vc;
     
     while(1) {
       wait();
@@ -646,19 +693,23 @@ SC_MODULE(axi_master_if) {
           wr_avail_reord_slots++;
         }
       }
+  
+      cr_t vc_upd;
+      if(wr_flit_cr_in.PopNB(vc_upd)) wr_credits_avail[vc_upd]++;
       
       axi4_::AddrPayload this_req;
       if(aw_in.PopNB(this_req)) {
         // A new request must stall until it is eligible to depart.
         // Reordering of responses of the same IDs are allowed and handled by the depacketizer in the reorder buffer
         // The response that might get reordered must be able to fit in the buffer
-        outs_table_entry sel_entry = wr_out_table[this_req.id.to_uint()];    
+        outs_table_entry sel_entry = wr_out_table[this_req.id.to_uint()];
         this_dst = addr_lut_wr(this_req.addr);
     
         bool          may_reorder   = (sel_entry.sent>0) && (sel_entry.dst_last != this_dst);
         bool          through_reord = may_reorder || sel_entry.reorder;
         unsigned char wait_for      =  sel_entry.sent;
-        
+  
+        this_vc = 0;
         // Stall until the necessary resources are available
         while(through_reord && (wr_avail_reord_slots<1)) {
           order_info rcv_fin;
@@ -690,6 +741,7 @@ SC_MODULE(axi_master_if) {
         }
       } else {
         // No available response
+        
         continue;
       }
       
@@ -697,13 +749,13 @@ SC_MODULE(axi_master_if) {
       wreq_flit_t tmp_flit;
       wreq_flit_t tmp_mule_flit;
       tmp_mule_flit.type    = HEAD;
+      tmp_mule_flit.vc      = this_vc;
       tmp_mule_flit.data[0] = ((sc_uint<dnp::PHIT_W>)this_ticket            << dnp::req::REORD_PTR) |
                               ((sc_uint<dnp::PHIT_W>)this_req.id            << dnp::req::ID_PTR)    |
                               ((sc_uint<dnp::PHIT_W>)dnp::PACK_TYPE__WR_REQ << dnp::T_PTR)          |
                               ((sc_uint<dnp::PHIT_W>)0                      << dnp::Q_PTR)          |
                               ((sc_uint<dnp::PHIT_W>)this_dst               << dnp::D_PTR)          |
-                              ((sc_uint<dnp::PHIT_W>)THIS_ID.read()         << dnp::S_PTR)          |
-                              ((sc_uint<dnp::PHIT_W>)0                      << dnp::V_PTR)          ;
+                              ((sc_uint<dnp::PHIT_W>)THIS_ID.read()             << dnp::S_PTR)          ;
   
       tmp_mule_flit.data[1] = ((sc_uint<dnp::PHIT_W>)this_req.len   << dnp::req::LE_PTR) |
                               ((sc_uint<dnp::PHIT_W>)this_req.addr & 0xffff);
@@ -711,7 +763,7 @@ SC_MODULE(axi_master_if) {
       tmp_mule_flit.data[2] = ((sc_uint<dnp::PHIT_W>)this_req.burst << dnp::req::BU_PTR)      |
                               ((sc_uint<dnp::PHIT_W>)this_req.size  << dnp::req::SZ_PTR)      |
                               ((sc_uint<dnp::PHIT_W>)(this_req.addr >> dnp::AL_W) << dnp::req::AH_PTR)  ;
-      
+
       wr_out_table[this_req.id.to_uint()].sent++;
       wr_out_table[this_req.id.to_uint()].dst_last = this_dst;
   
@@ -725,7 +777,7 @@ SC_MODULE(axi_master_if) {
       // If network is not ready, continue to poll for finished transactions
       #pragma hls_pipeline_init_interval 1
       #pragma pipeline_stall_mode flush
-      while(!wr_flit_out.PushNB(tmp_mule_flit)) {
+      while(wr_credits_avail[this_vc]==0) {
         order_info rcv_fin;
         if(wr_trans_fin.nb_read(rcv_fin)) {
           if(wr_out_table[rcv_fin.tid].sent==1) wr_out_table[rcv_fin.tid].reorder = false;
@@ -736,9 +788,15 @@ SC_MODULE(axi_master_if) {
             wr_avail_reord_slots++;
           }
         }
-        wait(); 
-      };
   
+        cr_t vc_upd;
+        if(wr_flit_cr_in.PopNB(vc_upd)) wr_credits_avail[vc_upd]++;
+        wait();
+      };
+      bool dbg_wreq_ok = wr_flit_data_out.PushNB(tmp_mule_flit); // We've already checked that !Full thus this should not block.
+      NVHLS_ASSERT_MSG(dbg_wreq_ok, "W Req pack DROP!!!");
+      wr_credits_avail[this_vc]--;
+      wait();
   
       // --- Start DATA Packetization --- //
       // Data Depacketization happens in a loop. Each iteration pops a flit and constructs a beat.
@@ -751,8 +809,8 @@ SC_MODULE(axi_master_if) {
       //    2) The remaining byte lanes are less than the available in the flit
       // For case (1) the flit is emptied and the next flit is popped at the next iteration
       // For case (2) the beat is pushed to Master and the next beat starts in the next iteration
-
-      sc_uint<8>  addr_init_aligned  = (this_req.addr.to_uint() & (cfg::WR_LANES-1)) & ~((1<<this_req.size.to_uint())-1);  
+      
+      sc_uint<8>  addr_init_aligned  = (this_req.addr.to_uint() & (cfg::WR_LANES-1)) & ~((1<<this_req.size.to_uint())-1);
       // For data Depacketization we keep 2 pointers.
       //   - One to keep track axi byte lanes to place to data  (axi_lane_ptr)
       //   - One to point at the data of the flit               (flit_phit_ptr)
@@ -805,7 +863,8 @@ SC_MODULE(axi_master_if) {
         // If network is not ready, continue to poll for finished transactions
         if(done_job || done_flit) {
           tmp_mule_flit.type = (bytes_packed+bytes_per_iter==bytes_total) ? TAIL : BODY;
-          while (!wr_flit_out.PushNB(tmp_mule_flit)) {
+          tmp_mule_flit.vc   = this_vc;
+          while (wr_credits_avail[this_vc]==0) {
             order_info rcv_fin;
             if(wr_trans_fin.nb_read(rcv_fin)) {
               if(wr_out_table[rcv_fin.tid].sent==1) wr_out_table[rcv_fin.tid].reorder = false;
@@ -816,12 +875,19 @@ SC_MODULE(axi_master_if) {
                 wr_avail_reord_slots++;
               }
             }
+  
+            cr_t vc_upd;
+            if (wr_flit_cr_in.PopNB(vc_upd)) wr_credits_avail[vc_upd]++;
             wait();
           }
+          bool dbg_wreq_ok = wr_flit_data_out.PushNB(tmp_mule_flit); // We've already checked that !Full thus this should not block.
+          NVHLS_ASSERT_MSG(dbg_wreq_ok, "W Req pack DROP!!!");
+          wr_credits_avail[this_vc]--;
+          wait();
         }
   
         // Check to either finish transaction or update the pointers for the next iteration
-        if (done_job) {
+        if (done_job) { // End of transaction
           break;
         } else { // Move to next iteration
           bytes_packed  = bytes_packed+bytes_per_iter;
@@ -840,7 +906,8 @@ SC_MODULE(axi_master_if) {
   //--- WRITE RESPonce DE-Packetizer ---//
   //------------------------------------//
   void wr_resp_depack_job(){
-    wr_flit_in.Reset();
+    wr_flit_data_in.Reset();
+    wr_flit_cr_out.Reset();
     b_out.Reset();
     
     for (int i=0; i<(1<<dnp::ID_W); ++i){
@@ -859,7 +926,7 @@ SC_MODULE(axi_master_if) {
       order_info trans_expect;
       if(wr_trans_init.nb_read(trans_expect)) {
         if(trans_expect.ticket<WR_REORD_SLOTS && WR_REORD_SLOTS) {
-          // PUSH new item to linked list
+          // PUSH NEW item to linked list
           if(wr_reord_book[trans_expect.tid].head_flit>=WR_REORD_SLOTS) {
             wr_reord_book[trans_expect.tid].head_flit = trans_expect.ticket;
           }
@@ -880,9 +947,13 @@ SC_MODULE(axi_master_if) {
       //   or Store it in the reorder buffer
       bool bypass = false;
       wresp_flit_t flit_rcv;
-      if(wr_flit_in.PopNB(flit_rcv)) {
+      if(wr_flit_data_in.PopNB(flit_rcv)) {
+        cr_t flit_rcv_vc = flit_rcv.get_vc();
+        bool dbg_wresp_cr_ok = wr_flit_cr_out.PushNB(flit_rcv_vc);
+        NVHLS_ASSERT_MSG(dbg_wresp_cr_ok, "W Resp credit DROP!!!");
+        
         unsigned char rcv_ticket = ((flit_rcv.data[0] >> (dnp::wresp::REORD_PTR)) & ((1<<dnp::REORD_W)-1));
-        if(rcv_ticket<WR_REORD_SLOTS && WR_REORD_SLOTS) {
+        if(rcv_ticket<WR_REORD_SLOTS && WR_REORD_SLOTS) { // Through reorder
           wr_reord_buff[rcv_ticket].flit  = flit_rcv;
           wr_reord_buff[rcv_ticket].valid = true;
         } else {
@@ -907,7 +978,7 @@ SC_MODULE(axi_master_if) {
         b_out.Push(this_resp);
         wr_trans_fin.write(fin_trans);
       
-      } else if (WR_REORD_SLOTS) { 
+      } else if (WR_REORD_SLOTS) {
         // Check ROB for valid responses to send to Master
         wresp_flit_t flit_reord;
         bool reord_valid = false;
@@ -960,7 +1031,7 @@ SC_MODULE(axi_master_if) {
       if (addr>=addr_map[i][0].read() && addr <= addr_map[i][1].read()) return i;
     }
     NVHLS_ASSERT_MSG(0, "RD address not resolved!");
-    return 0;
+    return 0; 
   };
   
   inline unsigned char addr_lut_wr(const axi4_::Addr addr) {

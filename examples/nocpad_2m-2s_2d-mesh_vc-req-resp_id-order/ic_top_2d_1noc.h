@@ -3,10 +3,10 @@
 
 #pragma once
 
-#include "../../src/axi_ifs/vc_based/axi_master_if_vc.h"
-#include "../../src/axi_ifs/vc_based/axi_slave_if_vc.h"
+#include "../../src/axi_master_if_vc.h"
+#include "../../src/axi_slave_if_vc.h"
 
-#include "../../src/routers/router_vc.h"
+#include "../../src/router_vc.h"
 
 #include "systemc.h"
 #include "nvhls_connections.h"
