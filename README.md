@@ -1,32 +1,41 @@
-NoCpad
+NoCpad: High-Level-Synthesis-ready AMBA AXI-4 compliant Network on Chip
 ========
+NoCpad provides optimized HLS-ready SystemC models of all required Network-on-Chip components, such as network interfaces and routers (including virtual channels), in order to build a scalable AMBA AXI-4 compliant SoC interconnect. Quality of results in terms of networking performance as well as hardware PPA matches closely that of custom RTL.
 
-HLS implementation of a modular AXI interconnect.
+AXI Master and Slave interfaces convert AXI traffic into a packetized format that is routed through an Network-on-Chip(NoC). A NoC is comprised by routers that provide communication between the various interfaces. Low level communication between components is performed using Connection channels, included with Mentor's Catapult HLS [HLSLibs](https://github.com/hlslibs/matchlib_connections), and MatchLib, a SystemC/C++ library of commonly-used hardware functions and components [MatchLib](https://github.com/NVlabs/matchlib)
 
-AXI Master and Slave interfaces convert AXI traffic into a packetized format that is routed through an Network-on-Chip(NoC). A NoC is comprised by routers that provide communication between the various interfaces.
+Why does it make sense to build a NoC using HLS?
+- NoC can change many times during design flow 
+    - Changes can be structural and/or architectural
+    - Re-verification should be fast
+- SystemC/C++ models abstract enough to be highly configurable
+    - Complex customizations can be easily architected
+    - C++ simulation is faster
+- HLS constraints can produce the needed result
+    - Or even lead to new unexplored alternatives 
+    - No need for re-verification
 
-Low level communication between components are based on the Connections channel implementation, included with the Catapult HLS tool [HLSLibs](https://github.com/hlslibs/matchlib_connections), and MatchLib, a SystemC/C++ library of commonly-used hardware functions and components [MatchLib](https://github.com/NVlabs/matchlib)
+NoCpad targets agile interconnect development. To stich a SoC interconnect NoCpad provides highly parameterizable AXI interfaces of various features, routers for wormhole and Virtual Channel based interconnects to form arbitrary topologies, and a library of various arbitration schemes.
 
-NoCpad targets to an agile interconnect devolepment, that may change during SoC design flow with different features, topologies, and protocol attributes. To stich an interconnect NoCpad provides highly parameterizable AXI interfaces of various features, routers for wormhole and Virtual Channel based interconnects to form arbitrary topologies, and arbiter library of various arbitration schemes.
+AMBA-AXI4 interfaces :
+- AXI porotocol compatibility 
+    - All burst types
+    - Multiple configurable transaction IDs
+    - Arbitrary data lane widths, even under the same interconnect
+    - Narrow and unaligned transactions
+- Internal packet based transport protocol (Duth Network Protocol, DNP)
+    - Arbitrary internal NoC widths
+- Matchlib AXI definitions for easy interoperability
 
-AXI interfaces :
-* AXI porotocol compatibility 
-* Matchlib AXI definitions for easy interoperability
-* All AXI burst types
-* Multiple AXI TIDs
-* Arbitrary AXI data lane widths, even under the same interconnect
-* Narrow and unaligned transactions
-* Internal packet based transport protocol (Duth Network Protocol, DNP)
-* Arbitrary internal NoC widths
-
-Routers :
-* Configurable Input/Output ports
+NoC Routers :
+* Configurable number of Input/Output ports
 * Various arbitration schemes
 * Able to form arbitrary network topologies
-* Wormohole routers with connections Ready-Valid flow controll
-* Virtual Channel based routers over connections links
+* Two forms of link-level flow control
+    * Wormhole routers with Ready-Valid flow controll using Connections
+    * Virtual Channel based usin Connections and credit-based flow control
 
-Arbitration Library:
+Library of arbiter components:
 * Fixed Priority
 * Round Robin
 * Matrix arbiter 
