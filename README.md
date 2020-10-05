@@ -43,6 +43,7 @@ Library of arbiter components:
 * Matrix arbiter 
 * Weighted Round Robin
 * Deficit Round Robin
+* Merged arbiter multiplexers
 
 ## Getting Started ##
 
@@ -83,8 +84,7 @@ Dimitris Konstantinou, Giorgos  Dimitrakopoulos, Dionisis Filippas
 
 ## Pending additions
 - Support for ACE cache coherent interfaces
-- 
-## License
 
+## License
 NoCpad is licensed under the [MIT License](./LICENSE).
 
