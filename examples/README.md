@@ -11,7 +11,7 @@ different IDs, followiong AXI ordering requirements.
 The ordering scheme allows outstanding even where transaction reordering is possible, 
 but utilizes a reordering buffer to guarantee AXI compatible ID order.
 
-* `examples/nocpad_2m-2s_2d-mesh_vc-req-resp_id-order/ic_top_2d_1noc.h` 
+`examples/nocpad_2m-2s_2d-mesh_vc-req-resp_id-order/ic_top_2d_1noc.h` 
 2 Master-2 Slave 64bit AXI interconnect with a single 2-D mesh with separate Virtual Channels for 
 Requests and Responses to avoid deadlocks. The ordering scheme is that of multiple destinations.
 
