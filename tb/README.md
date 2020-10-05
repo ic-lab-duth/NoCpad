@@ -1,0 +1,3 @@
+- `tb/tb_axi_con/axi_master.h` Testbench component that generates diverse Requests and verifies the responses
+- `tb/tb_axi_con/axi_slave.h` Testbench component that consumes and verifies received AXI Requests and produces AXI responses
+- `tb/tb_axi_con/harness.h` Testbench component that parameterizes and setups the necessary testbench master-slave agents and connects the underlying DUT AXI interconnect.
