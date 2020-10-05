@@ -1,5 +1,7 @@
-NoCpad: High-Level-Synthesis-ready AMBA AXI-4 compliant Network on Chip
-========
+# NoCpad #
+
+### High-Level-Synthesis-ready AMBA AXI-4 compliant Network on Chip ###
+
 NoCpad provides optimized HLS-ready SystemC models of all required Network-on-Chip components, such as network interfaces and routers (including virtual channels), in order to build a scalable AMBA AXI-4 compliant SoC interconnect. Quality of results in terms of networking performance as well as hardware PPA matches closely that of custom RTL.
 
 AXI Master and Slave interfaces convert AXI traffic into a packetized format that is routed through an Network-on-Chip(NoC). A NoC is comprised by routers that provide communication between the various interfaces. Low level communication between components is performed using Connection channels, included with Mentor's Catapult HLS [HLSLibs](https://github.com/hlslibs/matchlib_connections), and MatchLib, a SystemC/C++ library of commonly-used hardware functions and components [MatchLib](https://github.com/NVlabs/matchlib)
@@ -42,9 +44,9 @@ Library of arbiter components:
 * Weighted Round Robin
 * Deficit Round Robin
 
-# Getting Started
+## Getting Started ##
 
-## Tool versions
+### Tool versions ###
 
 The codebase is based on Connections and MatchLib, and follows the similar tool/dependency versions:
 
@@ -55,7 +57,7 @@ The codebase is based on Connections and MatchLib, and follows the similar tool/
 *  connections - included with catapult
 * `QuestaSim` - 2019.3_1
 
-## Environment requirements
+### Environment requirements
 
 Makefiles and synthesis scripts expect the following environment variables:
 (A sample bash script can be found in examples/setenv.sh)
@@ -76,10 +78,13 @@ In addition, the boost and systemc library locations are expected to be in `LD_L
     cd examples/<example>
     catapult -file go_hls_ic.tcl
 
-# Contributors
+## Contributors
 Dimitris Konstantinou, Giorgos  Dimitrakopoulos, Dionisis Filippas
 
-# License
+## Pending additions
+- Support for ACE cache coherent interfaces
+- 
+## License
 
 NoCpad is licensed under the [MIT License](./LICENSE).
 
