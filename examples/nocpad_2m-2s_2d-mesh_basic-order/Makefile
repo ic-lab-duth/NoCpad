@@ -1,19 +1,3 @@
-#
-# Copyright (c) 2016-2019, NVIDIA CORPORATION.  All rights reserved.
-# 
-# Licensed under the Apache License, Version 2.0 (the "License")
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-# 
-#     http://www.apache.org/licenses/LICENSE-2.0
-# 
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-
 CC = g++
 
 INCDIR ?=
@@ -59,8 +43,24 @@ endif
 .PHONY: Build
 Build: all
 
-clean: cov_clean
-	rm -rf *.o sim_* dump.vcd
 
-CMOD_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
-include $(CMOD_DIR)/cov_Makefile
+CFLAGS += -O0 -g -std=c++11 
+
+all: sim_sc
+
+LIBDIR += -L$(SYSTEMC_HOME)/lib -L$(BOOST_HOME)/stage/lib
+
+USER_FLAGS += -DSC_INCLUDE_DYNAMIC_PROCESSES -DCONNECTIONS_ACCURATE_SIM
+
+USER_FLAGS += -DUSE_ROUTER_ST_BUF
+
+run:
+	./sim_sc
+
+sim_sc: $(wildcard ../../src/include/*.h) $(wildcard ../../src/axi_ifs/*.h) $(wildcard ../../src/routers/*.h)
+	$(CC) -o sim_sc $(CFLAGS) $(USER_FLAGS) ./axi_main_con.cpp $(BOOSTLIBS) $(LIBS)
+
+clean: sim_clean
+
+sim_clean:
+	rm -rf *.o sim_* out.wlf trace.vcd transcript Cata* design_check* *.vhd cata*log sim_* trace.vcd out.wlf transcript

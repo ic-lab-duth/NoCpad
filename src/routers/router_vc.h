@@ -3,10 +3,10 @@
 
 #include <systemc.h>
 
-#include "../../include/flit_axi.h"
-#include "../../include/duth_fun.h"
-#include "../../include/arbiters.h"
-#include "../../fifo/fifo_queue_oh.h"
+#include "../include/flit_axi.h"
+#include "../include/duth_fun.h"
+#include "../include/arbiters.h"
+#include "../include/fifo_queue_oh.h"
 
 #include "nvhls_connections.h"
 

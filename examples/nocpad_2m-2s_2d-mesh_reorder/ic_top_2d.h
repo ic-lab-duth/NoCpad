@@ -3,19 +3,10 @@
 
 #pragma once
 
-#include "../../src/axi_ifs/axi_master_if.h"
+#include "../../src/axi_ifs/axi_master_if_reord.h"
 #include "../../src/axi_ifs/axi_slave_if.h"
 
-// def to choose NoC's router
-#define USE_ROUTER_ST_BUF
-
-#if defined(USE_ROUTER_ST_BUF)
-#include "../../src/routers/router_wh_buf.h"
-#elif defined(USE_ROUTER_ST_FIFO)
-#include "../../src/routers/router_wh_fifo.h"
-#else
-  #error No Router was selected. Choose [USE_ROUTER_ST_BUF | USE_ROUTER_ST_FIFO]
-#endif
+#include "../../src/routers/router_wh.h"
 
 #include "systemc.h"
 #include "nvhls_connections.h"
