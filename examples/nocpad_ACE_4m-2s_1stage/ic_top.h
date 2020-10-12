@@ -3,9 +3,9 @@
 
 #pragma once
 
-#include "../../src/ace/acelite_master_if_con.h"
-#include "../../src/ace/ace_master_if_con.h"
-#include "../../src/ace/ace_slave_if_con.h"
+#include "../../src/ace/acelite_master_if.h"
+#include "../../src/ace/ace_master_if.h"
+#include "../../src/ace/ace_slave_if.h"
 #include "../../src/ace/ace_home.h"
 
 #include "../../src/router_wh.h"
@@ -104,10 +104,10 @@ public:
   
   //--- Internals ---//
   // Master/Slave IFs
-  ace_master_if_con     < smpl_cfg > *master_if[smpl_cfg::FULL_MASTER_NUM];
-  acelite_master_if_con < smpl_cfg > *master_lite_if[smpl_cfg::LITE_MASTER_NUM];
-  ace_slave_if_con      < smpl_cfg > *slave_if[smpl_cfg::SLAVE_NUM];
-  ace_home              < smpl_cfg > *home[smpl_cfg::HOME_NUM];
+  ace_master_if     < smpl_cfg > *master_if[smpl_cfg::FULL_MASTER_NUM];
+  acelite_master_if < smpl_cfg > *master_lite_if[smpl_cfg::LITE_MASTER_NUM];
+  ace_slave_if      < smpl_cfg > *slave_if[smpl_cfg::SLAVE_NUM];
+  ace_home          < smpl_cfg > *home[smpl_cfg::HOME_NUM];
   
   // NoC Channels
   // READ Fwd Req, master+home -> slaves+home
@@ -173,7 +173,7 @@ public:
     // --- SLAVE-IFs --- //
     // -------------------//
     for(unsigned char j=0; j<smpl_cfg::SLAVE_NUM; ++j){
-      slave_if[j] = new ace_slave_if_con < smpl_cfg > (sc_gen_unique_name("Slave-if"));
+      slave_if[j] = new ace_slave_if < smpl_cfg > (sc_gen_unique_name("Slave-if"));
       slave_if[j]->clk(clk);
       slave_if[j]->rst_n(rst_n);
       
@@ -199,7 +199,7 @@ public:
     // ------------------------------ //
     // Connect each Master-IF to the appropriate channels
     for(int i=0; i<smpl_cfg::FULL_MASTER_NUM; ++i){
-      master_if[i] = new ace_master_if_con < smpl_cfg > (sc_gen_unique_name("Master-if"));
+      master_if[i] = new ace_master_if < smpl_cfg > (sc_gen_unique_name("Master-if"));
       master_if[i]->clk(clk);
       master_if[i]->rst_n(rst_n);
       
@@ -239,7 +239,7 @@ public:
       
       // Connect ACE LITE Master-IFs to the appropriate channels
       for(int i=0; i<smpl_cfg::LITE_MASTER_NUM; ++i){
-        master_lite_if[i] = new acelite_master_if_con < smpl_cfg > (sc_gen_unique_name("Master-Lite-if"));
+        master_lite_if[i] = new acelite_master_if < smpl_cfg > (sc_gen_unique_name("Master-Lite-if"));
         master_lite_if[i]->clk(clk);
         master_lite_if[i]->rst_n(rst_n);
         

@@ -85,7 +85,7 @@ struct wr_trans_info_t {
 // The Responses are getting packetized into seperate threads and are fed back to the network
 // Thus Slave interface comprises of 4 distinct/parallel blocks WR/RD pack and WR/RD depack
 template <typename cfg>
-SC_MODULE(ace_slave_if_con) {
+SC_MODULE(ace_slave_if) {
   typedef typename ace::ace5<axi::cfg::ace>  ace5_;
   typedef typename axi::AXI4_Encoding      enc_;
   
@@ -136,9 +136,9 @@ SC_MODULE(ace_slave_if_con) {
   sc_fifo< sc_uint<dnp::ace::ID_W> > INIT_S1(wr_trans_fin);  // Pack   to Depack
   
   // Constructor
-  SC_HAS_PROCESS(ace_slave_if_con);
+  SC_HAS_PROCESS(ace_slave_if);
     
-    ace_slave_if_con(sc_module_name name_="ace_slave_if_con")
+    ace_slave_if(sc_module_name name_="ace_slave_if")
     : 
     sc_module (name_),
     rd_trans_init (3),

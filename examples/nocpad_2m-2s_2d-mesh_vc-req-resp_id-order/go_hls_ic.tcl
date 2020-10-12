@@ -78,7 +78,7 @@ set CLK_PERIOD 10
 set SRC_DIR "../../"
 
 set DESIGN_FILES [list ./ic_top_2d_1noc.h]
-set TB_FILES [list ./axi_main_con.cpp]
+set TB_FILES [list ./axi_main.cpp]
 
 # Choose router
 set ROUTER_SELECT_FLAG "-DUSE_ROUTER_ST_BUF"

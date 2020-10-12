@@ -57,7 +57,7 @@ run:
 	./sim_sc
 
 sim_sc: $(wildcard ../../src/include/*.h) $(wildcard ../../src/axi_ifs/*.h) $(wildcard ../../src/routers/*.h)
-	$(CC) -o sim_sc $(CFLAGS) $(USER_FLAGS) ./axi_main_con.cpp $(BOOSTLIBS) $(LIBS)
+	$(CC) -o sim_sc $(CFLAGS) $(USER_FLAGS) ./axi_main.cpp $(BOOSTLIBS) $(LIBS)
 
 clean: sim_clean
 
