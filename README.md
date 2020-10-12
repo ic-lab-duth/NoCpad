@@ -6,7 +6,7 @@ NoCpad provides optimized HLS-ready SystemC models of all required Network-on-Ch
 
 Network interfaces translate AMBA AXI-4 transactions to an internal versatible packetized protocol that is routed through a Network-on-Chip (NoC). Both *coherent* and *non-coherent* transactions are supported including AXI4, ACE network interfaces. Furthermore, ACE-Lite interfaces enable agents with not caches (such as DMA controllers or hardware accelerators) to access shareable data and participate in a mixed ACE and ACE-Lite interconnect.
 
-![A network on chip connecting IP cores using network interfaces and routers](/image/noc.eps)
+![A network on chip connecting IP cores using network interfaces and routers](noc.png)
 
 Link-level communication between components is performed using Connection channels, included in Mentor's Catapult HLS [HLSLibs](https://github.com/hlslibs/matchlib_connections), and MatchLib, a SystemC/C++ library of commonly-used hardware functions and components [MatchLib](https://github.com/NVlabs/matchlib)
 
