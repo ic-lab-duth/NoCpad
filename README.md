@@ -1,12 +1,14 @@
 # NoCpad #
 
-### High-Level-Synthesis-ready AMBA AXI-4, ACE and ACE Lite compliant Network on Chip ###
+### AMBA AXI-4 Network on Chip designed for HLS ###
 
-NoCpad provides optimized HLS-ready SystemC models of all required Network-on-Chip components, such as network interfaces and routers (including virtual channels), in order to build a scalable AMBA compliant SoC interconnect. Quality of results in terms of networking performance as well as hardware PPA matches closely that of custom RTL.
+NoCpad provides optimized HLS-ready SystemC models of all required Network-on-Chip components, such as network interfaces and routers (including virtual channels), in order to build a scalable AMBA-compliant SoC interconnect fabric. Quality of results in terms of networking performance as well as hardware PPA matches closely that of custom RTL.
 
-The included AMBA interfaces support AMBA AXI-4 for high performance memory-mapped accesses. Based on AXI's cache coherency extension, ACE interfaces have been developed enabling coherency among the participating master caches minimizing the need for accesses to slow main memories. Furthermore, ACE-Lite interfaces enable non-cached agents to access shareable data and participate in a Mixed ACE and ACE-Lite interconnect.
+Network interfaces translate AMBA AXI-4 transactions to an internal versatible packetized protocol that is routed through a Network-on-Chip (NoC). Both *coherent* and *non-coherent* transactions are supported including AXI4, ACE network interfaces. Furthermore, ACE-Lite interfaces enable agents with not caches (such as DMA controllers or hardware accelerators) to access shareable data and participate in a mixed ACE and ACE-Lite interconnect.
 
-AXI Master and Slave interfaces convert AXI traffic into a packetized format that is routed through an Network-on-Chip(NoC). A NoC is composed of routers that provide communication between the various interfaces. Low level communication between components is performed using Connection channels, included with Mentor's Catapult HLS [HLSLibs](https://github.com/hlslibs/matchlib_connections), and MatchLib, a SystemC/C++ library of commonly-used hardware functions and components [MatchLib](https://github.com/NVlabs/matchlib)
+![A network on chip connecting IP cores using network interfaces and routers](/image/noc.eps)
+
+Link-level communication between components is performed using Connection channels, included in Mentor's Catapult HLS [HLSLibs](https://github.com/hlslibs/matchlib_connections), and MatchLib, a SystemC/C++ library of commonly-used hardware functions and components [MatchLib](https://github.com/NVlabs/matchlib)
 
 Why does it make sense to build a NoC using HLS?
 - NoC can change many times during design flow 
@@ -19,7 +21,8 @@ Why does it make sense to build a NoC using HLS?
     - Or even lead to new unexplored alternatives 
     - No need for re-verification
 
-NoCpad targets agile interconnect development. To stich a SoC interconnect NoCpad provides ACE Cache coherent interfaces of different features enabling cached components on a NoC fabric, highly parameterizable AXI interfaces of various features, routers for wormhole and Virtual Channel based interconnects to form arbitrary topologies, and a library of various arbitration schemes.
+NoCpad targets agile interconnect development. The designer of the network fabric can choose across non-coherent AXI-4 interfaces or coherent ACE interfaces to
+compose an efficent NoC. Data transfer is handled by NoC routers that support simple wormhole or virtual-channel flow control. In all cases, contention is resolved by arbiter modules chosen from a library of various arbiter architectures.
 
 AMBA-AXI4 interfaces :
 - AXI porotocol compatibility 
@@ -27,39 +30,38 @@ AMBA-AXI4 interfaces :
     - Multiple configurable transaction IDs
     - Arbitrary data lane widths, even under the same interconnect
     - Narrow and unaligned transactions
-- Internal packet based transport protocol (Duth Network Protocol, DNP)
+- Internal packet based transport protocol 
     - Arbitrary internal NoC widths
-- Matchlib AXI definitions for easy interoperability
+- Matchlib AXI class definitions for easy interoperability
 
 AMBA-ACE, ACE-Lite interfaces :
 - ACE porotocol compatibility
     - Various cache line sizes
-    - Interconnect's Data channels, are currenty sized depending the chosen cache width
-    - HOME-Node for transaction PoS(Point-of-Serialization) and protocol managment
+    - Interconnect's Data channels, are currenty sized depending the chosen cache line width
+    - HOME-Node for transaction PoS (Point-of-Serialization) and protocol management
     - Multiple HOME nodes support for load balancing
-    - ACE-Lite support for uncached agents, in a mixed interconnect
+    - ACE-Lite support for uncached agents
     - Support for the optional snoop data response 
-    - Mixed coherent and non-coherent 
-- Internal packet based transport protocol (Duth Network Protocol, DNP extended for ACE)
+    - Mixed coherent and non-coherent traffic
+- Internal packet based transport protocol 
 - Extends Matchlib definitions for ACE support, based on the AXI paradigm 
 
 NoC Routers :
-* Configurable number of Input/Output ports
-* Various arbitration schemes
-* Able to form arbitrary network topologies
-* Two forms of link-level flow control
+- Configurable number of Input/Output ports
+- Various arbitration schemes
+- Able to form arbitrary network topologies
+- Two forms of link-level flow control
     * Wormhole routers with Ready-Valid flow controll using Connections
     * Virtual Channel based usin Connections and credit-based flow control
 
 Library of arbiter components:
-* Fixed Priority
-* Round Robin
-* Matrix arbiter 
-* Weighted Round Robin
-* Deficit Round Robin
-* Merged arbiter multiplexers
+- Fixed Priority
+- Round Robin
+- Matrix arbiter 
+- Weighted Round Robin
+- Deficit Round Robin
+- Merged arbiter multiplexers
 
-NoCpad targets to enable the user to come up with complex and featured interconnects for the entire SoC communication. An homogenous SoC is depicted below, comprised by a 2-D mesh NoC that 
 
 ## Getting Started ##
 
