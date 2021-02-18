@@ -4,7 +4,7 @@
 
 NoCpad provides optimized HLS-ready SystemC models of all required Network-on-Chip components, such as network interfaces and routers (including virtual channels), in order to build a scalable AMBA-compliant SoC interconnect fabric. Quality of results in terms of networking performance as well as hardware PPA matches closely that of custom RTL.
 
-Network interfaces translate AMBA AXI-4 transactions to an internal versatible packetized protocol that is routed through a Network-on-Chip (NoC). Both *coherent* and *non-coherent* transactions are supported including AXI4, ACE network interfaces. Furthermore, ACE-Lite interfaces enable agents with not caches (such as DMA controllers or hardware accelerators) to access shareable data and participate in a mixed ACE and ACE-Lite interconnect.
+Network interfaces translate AMBA AXI-4 transactions to an internal versatible packetized protocol that is routed through a Network-on-Chip (NoC). Both *coherent* and *non-coherent* transactions are supported including AXI4, ACE network interfaces. Furthermore, ACE-Lite interfaces enable agents with no caches (such as DMA controllers or hardware accelerators) to access shareable data and participate in a mixed ACE and ACE-Lite interconnect.
 
 ![A network on chip connecting IP cores using network interfaces and routers](noc.png)
 
