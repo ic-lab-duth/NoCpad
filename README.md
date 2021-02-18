@@ -8,7 +8,8 @@ Network interfaces translate AMBA AXI-4 transactions to an internal versatible p
 
 ![A network on chip connecting IP cores using network interfaces and routers](noc.png)
 
-Link-level communication between components is performed using Connection channels, included in Mentor's Catapult HLS [HLSLibs](https://github.com/hlslibs/matchlib_connections), and MatchLib, a SystemC/C++ library of commonly-used hardware functions and components [MatchLib](https://github.com/NVlabs/matchlib)
+Link-level communication between components is performed using Connection channels, included in Mentor's Catapult HLS [HLSLibs](https://github.com/hlslibs/matchlib_connections), and [MatchLib](https://github.com/NVlabs/matchlib)
+a SystemC/C++ library of commonly-used hardware functions and components.
 
 Why does it make sense to build a NoC using HLS?
 - NoC can change many times during design flow 
